@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import CONFIG from "./pulse-config.json";
+import {
+  generateTier0Agents, initMoneySupply, runTier0Tick,
+  applyTier0MoneyFlows, applyInstitutionalMoneyFlows, fmtMoney,
+} from "./ruleEngine.js";
 
 /* ------------------------------------------------------------------ *
  * PULSE — Economic Sentiment Observatory + Message Bus
@@ -85,8 +89,14 @@ function initEconomy() {
     v_realty: { id: "v_realty", name: "Okafor Realty", sector: "real estate", founder: "okafor_realty", employees: [] },
     v_megacorp: { id: "v_megacorp", name: "MegaCorp Industries", sector: "conglomerate", founder: "megacorp_industries", employees: [] },
   };
-  return { agents, ventures, seq: 1, dynamicPersonas: {},
-    totals: { hires: 0, deals: 0, launches: 0, layoffs: 0, invests: 0, closes: 0, marriages: 0, births: 0, deaths: 0, buys: 0, purchases: 0, rate_changes: 0, regulates: 0, spending_bills: 0, tax_actions: 0 } };
+  return {
+    agents, ventures, seq: 1, dynamicPersonas: {},
+    tier0Agents: generateTier0Agents(),
+    moneyState: initMoneySupply(),
+    tier0Stats: null,
+    prevWithdrawalRate: 0,
+    totals: { hires: 0, deals: 0, launches: 0, layoffs: 0, invests: 0, closes: 0, marriages: 0, births: 0, deaths: 0, buys: 0, purchases: 0, rate_changes: 0, regulates: 0, spending_bills: 0, tax_actions: 0 },
+  };
 }
 
 const ventureOfFounder = (econ, h) => Object.values(econ.ventures).find((v) => v.founder === h) || null;
@@ -554,6 +564,123 @@ function VentureCard({ v, econView }) {
   );
 }
 
+/* ── Money supply panel ─────────────────────────────────────────────────────── */
+function MoneyPanel({ money, tick }) {
+  if (!money) return <div className="muted">Awaiting first cycle…</div>;
+  const flows = money.lastFlows;
+  return (
+    <div className="money-panel">
+      <div className="money-row">
+        <span className="money-label">M2</span>
+        <span className="money-val">{fmtMoney(money.m2_B)}</span>
+      </div>
+      <div className="money-row">
+        <span className="money-label">Consumer pool</span>
+        <span className="money-val dim">{fmtMoney(money.consumer_pool_B)}</span>
+      </div>
+      <div className="money-row">
+        <span className="money-label">Business pool</span>
+        <span className="money-val dim">{fmtMoney(money.business_pool_B)}</span>
+      </div>
+      <div className="money-row">
+        <span className="money-label">Treasury</span>
+        <span className="money-val dim">{fmtMoney(money.treasury_B)}</span>
+      </div>
+      <div className="money-row">
+        <span className="money-label">Fed balance</span>
+        <span className="money-val dim">{fmtMoney(money.fed_balance_B)}</span>
+      </div>
+      {tick > 0 && flows && (
+        <div className="money-flows">
+          <div className="flow-row"><span>Wages paid</span><span className="flow-pos">{fmtMoney(flows.wages_B)}</span></div>
+          <div className="flow-row"><span>Income tax</span><span className="flow-neg">−{fmtMoney(flows.income_tax_B)}</span></div>
+          <div className="flow-row"><span>Corp tax</span><span className="flow-neg">−{fmtMoney(flows.corporate_tax_B)}</span></div>
+          <div className="flow-row"><span>Consumer spend</span><span className="flow-pos">{fmtMoney(flows.consumer_spend_B)}</span></div>
+          <div className="flow-row"><span>B2B volume</span><span className="flow-pos">{fmtMoney(flows.b2b_spend_B)}</span></div>
+          <div className="flow-row"><span>Deposit interest</span><span className="flow-pos">{fmtMoney(flows.deposit_interest_B)}</span></div>
+          {flows.withdrawal_B > 0 && <div className="flow-row"><span>Withdrawals</span><span className="flow-neg">−{fmtMoney(flows.withdrawal_B)}</span></div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Population panel ───────────────────────────────────────────────────────── */
+function PopulationPanel({ stats }) {
+  if (!stats) return <div className="muted">Awaiting first cycle…</div>;
+  const { depositors: D, businesses: B, consumers: C, investors: I } = stats;
+  return (
+    <div className="pop-panel">
+      <div className="pop-row">
+        <span className="pop-icon">🏦</span>
+        <span className="pop-label">Depositors</span>
+        <span className="pop-detail">{D.total} · <span style={{color:"#D9544D"}}>{D.withdrew} withdrew</span>{D.deposited > 0 ? <span style={{color:"#3FB8A0"}}> · {D.deposited} added</span> : null}</span>
+      </div>
+      <div className="pop-row">
+        <span className="pop-icon">🏪</span>
+        <span className="pop-label">Businesses</span>
+        <span className="pop-detail">{B.total} firms · {B.total_employees} emp · <span style={{color:"#3FB8A0"}}>+{B.net_hires}</span>/<span style={{color:"#D9544D"}}>-{B.net_layoffs}</span></span>
+      </div>
+      <div className="pop-row">
+        <span className="pop-icon">🛒</span>
+        <span className="pop-label">Consumers</span>
+        <span className="pop-detail">{C.total} · {C.spent} txns · {C.major_purchases} major</span>
+      </div>
+      <div className="pop-row">
+        <span className="pop-icon">📊</span>
+        <span className="pop-label">Investors</span>
+        <span className="pop-detail">{I.total} funds · <span style={{color:"#3FB8A0"}}>{I.went_risk_on}↑</span> <span style={{color:"#D9544D"}}>{I.went_risk_off}↓</span></span>
+      </div>
+    </div>
+  );
+}
+
+/* ── Macro editor modal ─────────────────────────────────────────────────────── */
+function MacroEditor({ vitals, onApply, onCancel }) {
+  const [edits, setEdits] = useState({ ...vitals });
+
+  const handleChange = (key, val) => {
+    const b = BOUNDS[key];
+    const clamped = clamp(parseFloat(val) || vitals[key], b[0], b[1]);
+    setEdits(prev => ({ ...prev, [key]: clamped }));
+  };
+
+  const handleApply = () => {
+    onApply(edits);
+  };
+
+  return (
+    <div className="macro-editor-overlay" onClick={onCancel}>
+      <div className="macro-editor-modal" onClick={e => e.stopPropagation()}>
+        <div className="macro-editor-head">
+          <h3>Edit Macro Factors</h3>
+          <button className="close-btn" onClick={onCancel}>✕</button>
+        </div>
+        <div className="macro-editor-body">
+          {INDICATORS.map(m => (
+            <div key={m.key} className="macro-edit-row">
+              <label htmlFor={`macro-${m.key}`} className="macro-label">{m.label}</label>
+              <input
+                id={`macro-${m.key}`}
+                type="number"
+                step={m.key === "stocks" ? "1" : "0.01"}
+                value={edits[m.key].toFixed(m.key === "stocks" ? 0 : 2)}
+                onChange={e => handleChange(m.key, e.target.value)}
+                className="macro-input"
+              />
+              <span className="macro-unit">{m.unit}</span>
+            </div>
+          ))}
+        </div>
+        <div className="macro-editor-foot">
+          <button className="btn ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn primary" onClick={handleApply}>Apply & Step</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================================================================== */
 export default function App() {
   const [scenarioKey, setScenarioKey] = useState("soft_landing");
@@ -568,6 +695,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [speed, setSpeed] = useState("normal");
   const [econView, setEconView] = useState(initEconomy());
+  const [macroEditOpen, setMacroEditOpen] = useState(false);
+  const [macroEdits, setMacroEdits] = useState(null);
 
   const sim = useRef({ vitals: SCENARIOS.soft_landing.init, tick: 0, mood: 0 });
   const econRef = useRef(initEconomy());
@@ -589,20 +718,32 @@ export default function App() {
     setEconView(econRef.current);
     setVitals(init); setDeltas(null); setTick(0); setFeed([]);
     setMood(0); setHistory([]); setPlaying(false); setStatus("idle"); setError("");
+    setMacroEdits(null); setMacroEditOpen(false);
   }
   function onScenario(e) { setScenarioKey(e.target.value); resetTo(e.target.value); }
 
-  async function runTick() {
+  async function runTick(overrideVitals = null) {
     if (ticking.current || sim.current.tick >= MAX_TICKS) return;
     ticking.current = true; setStatus("ticking"); setError("");
     const prev = sim.current;
     const nextTick = prev.tick + 1;
-    let nv = stepMacro(prev.vitals, scenarioKey, nextTick, prev.mood);
+    let nv = overrideVitals || stepMacro(prev.vitals, scenarioKey, nextTick, prev.mood);
     setVitals(nv); setTick(nextTick);
     try {
+      // ── Tier-0: rule-based agents run first, shaping the world before LLM acts ──
+      const { micro: t0micro, stats: t0stats, ledger: t0ledger, flows, derivedPools, withdrawalRate } =
+        runTier0Tick(econRef.current.tier0Agents, econRef.current.moneyState, nv, prev.vitals, econRef.current.prevWithdrawalRate);
+      econRef.current.moneyState = applyTier0MoneyFlows(econRef.current.moneyState, flows, derivedPools);
+      econRef.current.prevWithdrawalRate = withdrawalRate;
+      econRef.current.tier0Stats = t0stats;
+      nv = applyMicroToMacro(nv, t0micro);
+
       const dzPre = {}; for (const m of INDICATORS) dzPre[m.key] = nv[m.key] - prev.vitals[m.key];
       const { posts, events } = await fetchTurn(nv, dzPre, nextTick, prev.mood, recentRef.current, econRef.current);
       const { ledger, micro } = applyEvents(econRef.current, events, nv, nextTick);
+
+      // Apply LLM institutional events (rate_change, stimulus, etc.) to money supply
+      econRef.current.moneyState = applyInstitutionalMoneyFlows(econRef.current.moneyState, events);
       nv = applyMicroToMacro(nv, micro);
       const dz = {}; for (const m of INDICATORS) dz[m.key] = nv[m.key] - prev.vitals[m.key];
 
@@ -624,10 +765,19 @@ export default function App() {
         const actor = byGroupHandle[p.handle] || personaOf(econRef.current, p.handle);
         return { ...p, tick: nextTick, id: nextTick * 1000 + i, _emoji: actor?.emoji || "👤", _name: actor?.name || p.handle, _group: !!byGroupHandle[p.handle] };
       });
-      const stampedSys = [...ledger.map((s, i) => ({ ...s, type: "system", tick: nextTick, id: nextTick * 1000 + 100 + i })), ...comingOfAge];
+      const stampedT0 = t0ledger.map((s, i) => ({ ...s, type: "system", tick: nextTick, id: nextTick * 1000 + 500 + i }));
+      const stampedSys = [...ledger.map((s, i) => ({ ...s, type: "system", tick: nextTick, id: nextTick * 1000 + 100 + i })), ...comingOfAge, ...stampedT0];
 
       setVitals(nv); setDeltas(dz); setMood(avg);
-      setEconView({ ...econRef.current, ventures: { ...econRef.current.ventures }, agents: { ...econRef.current.agents }, dynamicPersonas: { ...econRef.current.dynamicPersonas }, totals: { ...econRef.current.totals } });
+      setEconView({
+        ...econRef.current,
+        ventures: { ...econRef.current.ventures },
+        agents: { ...econRef.current.agents },
+        dynamicPersonas: { ...econRef.current.dynamicPersonas },
+        totals: { ...econRef.current.totals },
+        moneyState: { ...econRef.current.moneyState },
+        tier0Stats: { ...econRef.current.tier0Stats },
+      });
       setHistory((h) => [...h, { tick: nextTick, mood: avg }].slice(-MAX_TICKS));
       setFeed((f) => [...stampedAgents, ...stampedSys, ...f].slice(0, 260));
 
@@ -671,6 +821,7 @@ export default function App() {
           </div>
           <button className="btn primary" onClick={togglePlay} disabled={status === "done"}>{playing ? "⏸ Pause" : busy ? "● Running" : "▷ Run"}</button>
           <button className="btn" onClick={step} disabled={playing || busy || status === "done"}>Step</button>
+          <button className="btn" onClick={() => { setMacroEdits({ ...vitals }); setMacroEditOpen(true); }} disabled={playing || busy || status === "done"}>⚙ Macro</button>
           <button className="btn ghost" onClick={() => resetTo(scenarioKey)}>Reset</button>
         </div>
       </header>
@@ -745,7 +896,13 @@ export default function App() {
             })}
           </div>
 
-          <div className="legend">Macro engine is deterministic; the cast's words, their actions, and institutional decisions — every hire, rate change, bailout, birth, and death — are decided live by Claude. The engine only keeps the books.</div>
+          <div className="rail-section-title mt">Money supply</div>
+          <MoneyPanel money={econView.moneyState} tick={tick} />
+
+          <div className="rail-section-title mt">Population (Tier-0)</div>
+          <PopulationPanel stats={econView.tier0Stats} />
+
+          <div className="legend">Macro engine is deterministic. Tier-0 rule-based agents (depositors, businesses, consumers, investors) act first each cycle, shaping the economy before the named cast — whose words and institutional decisions are decided live by Claude.</div>
         </aside>
 
         <section className="feed-wrap">
@@ -768,6 +925,20 @@ export default function App() {
           )}
         </section>
       </main>
+
+      {macroEditOpen && (
+        <MacroEditor
+          vitals={macroEdits || vitals}
+          onApply={(edited) => {
+            setMacroEditOpen(false);
+            runTick(edited);
+          }}
+          onCancel={() => {
+            setMacroEdits(null);
+            setMacroEditOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -888,6 +1059,39 @@ const CSS = `
 
 @keyframes slideIn{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:none}}
 @keyframes beat{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.55}}
+
+.money-panel{display:flex;flex-direction:column;gap:5px;background:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12px}
+.money-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.money-label{color:var(--dim);white-space:nowrap}
+.money-val{font-family:'SF Mono',ui-monospace,monospace;font-weight:700;font-size:12px}
+.money-val.dim{font-weight:500;color:var(--dim)}
+.money-flows{margin-top:8px;border-top:1px solid var(--line);padding-top:7px;display:flex;flex-direction:column;gap:3px}
+.flow-row{display:flex;justify-content:space-between;font-size:11px;color:var(--dim)}
+.flow-pos{color:#3FB8A0;font-family:'SF Mono',ui-monospace,monospace}
+.flow-neg{color:#D9544D;font-family:'SF Mono',ui-monospace,monospace}
+
+.pop-panel{display:flex;flex-direction:column;gap:6px}
+.pop-row{display:flex;align-items:center;gap:6px;font-size:11px;background:var(--ink2);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+.pop-icon{font-size:13px;width:18px;text-align:center}
+.pop-label{font-weight:600;width:62px;flex:none;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;font-size:10px}
+.pop-detail{color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.macro-editor-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;display:grid;place-items:center;animation:fadeIn .2s}
+.macro-editor-modal{background:var(--ink2);border:1px solid var(--line);border-radius:16px;padding:24px;width:90%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.5);animation:slideUp .3s}
+.macro-editor-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.macro-editor-head h3{margin:0;font-size:16px;font-weight:700;color:var(--text)}
+.close-btn{background:transparent;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:0;width:24px;height:24px;display:grid;place-items:center;border-radius:6px}
+.close-btn:hover{background:var(--ink3);color:var(--text)}
+.macro-editor-body{display:flex;flex-direction:column;gap:14px;margin-bottom:20px}
+.macro-edit-row{display:flex;align-items:center;gap:12px}
+.macro-label{flex:1;font-size:13px;font-weight:600;color:var(--text);min-width:90px}
+.macro-input{background:var(--ink3);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;font-family:ui-monospace,monospace;width:80px;text-align:right}
+.macro-input:focus{outline:none;border-color:var(--amber);box-shadow:0 0 0 2px rgba(232,161,58,.2)}
+.macro-unit{color:var(--dim);font-size:12px;width:30px;text-align:right}
+.macro-editor-foot{display:flex;justify-content:flex-end;gap:8px}
+
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
 
 @media (max-width:860px){
   .grid{grid-template-columns:1fr}

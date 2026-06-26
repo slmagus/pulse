@@ -1,0 +1,114 @@
+{
+  "_doc": "Pulse Rule Engine — economist parameter sheet. Edit between runs to change simulation behavior. All money values in $billions USD.",
+
+  "populations": {
+    "retail_depositors": {
+      "count": 200,
+      "insured_fraction": 0.60,
+      "avg_deposits_B": 70,
+      "deposit_spread": 0.6,
+      "actions_per_tick": 2
+    },
+    "small_businesses": {
+      "count": 60,
+      "sector_mix": { "tech": 0.15, "food": 0.25, "retail": 0.25, "services": 0.25, "logistics": 0.10 },
+      "avg_employees": 8,
+      "avg_cash_B": 0.25,
+      "avg_quarterly_revenue_B": 0.12,
+      "actions_per_tick": 3
+    },
+    "consumers": {
+      "count": 150,
+      "employed_fraction": 0.75,
+      "avg_cash_B": 0.045,
+      "spending_spread": 0.4,
+      "actions_per_tick": 4
+    },
+    "institutional_investors": {
+      "count": 10,
+      "avg_aum_B": 12.0,
+      "initial_risk_on_fraction": 0.70,
+      "actions_per_tick": 2
+    }
+  },
+
+  "money_supply": {
+    "initial_m2_B": 22000,
+    "initial_fed_balance_B": 7700,
+    "initial_treasury_B": 800,
+    "initial_consumer_pool_B": 14000,
+    "initial_business_pool_B": 8000,
+
+    "_note_institutional_events": {
+      "stimulus_B_per_point": 150,
+      "spending_bill_B_per_point": 100,
+      "tax_cut_B_per_point": 80,
+      "tax_hike_B_per_point": 80,
+      "subsidize_B_per_point": 40,
+      "rate_hike_m2_shrink_per_pct": 200,
+      "rate_cut_m2_grow_per_pct": 180
+    }
+  },
+
+  "fiscal": {
+    "income_tax_rate": 0.22,
+    "corporate_tax_rate": 0.21,
+    "quarterly_wage_per_employee_B": 0.020
+  },
+
+  "rules": {
+    "retail_depositor": {
+      "withdraw_confidence_floor": 44,
+      "withdraw_base_probability": 0.04,
+      "herd_multiplier": 3.5,
+      "herd_threshold": 0.08,
+      "deposit_confidence_ceiling": 72,
+      "deposit_probability": 0.012,
+      "uninsured_risk_premium": 2.2
+    },
+    "small_business": {
+      "hire_gdp_threshold": 1.8,
+      "hire_confidence_threshold": 58,
+      "layoff_gdp_threshold": 0.6,
+      "layoff_confidence_threshold": 42,
+      "rate_sensitivity": 0.40,
+      "hire_probability_max": 0.10,
+      "layoff_probability_max": 0.08,
+      "revenue_spend_pass_through": 0.65,
+      "deal_probability": 0.15,
+      "invest_probability": 0.05
+    },
+    "consumer": {
+      "spend_confidence_threshold": 52,
+      "unemployment_spend_penalty": 0.40,
+      "major_purchase_confidence_threshold": 68,
+      "base_spend_rate": 0.045,
+      "rate_savings_sensitivity": 0.12,
+      "major_purchase_probability": 0.06,
+      "avg_cash_B": 0.045
+    },
+    "institutional_investor": {
+      "invest_stock_momentum_threshold": 0.5,
+      "withdraw_rate_shock_threshold": 0.50,
+      "withdraw_gdp_floor": 0.4,
+      "invest_probability_max": 0.22,
+      "withdraw_probability_max": 0.28,
+      "equity_allocation_shift_B": 5.0
+    }
+  },
+
+  "contagion": {
+    "systemic_withdrawal_threshold": 0.15,
+    "confidence_contagion_factor": 0.6
+  },
+
+  "macro_sensitivities": {
+    "deposit_withdrawal_confidence_hit": -0.7,
+    "deposit_inflow_confidence_boost": 0.25,
+    "consumer_spend_gdp_boost": 0.055,
+    "business_hire_unemployment_reduction": -0.14,
+    "business_layoff_unemployment_increase": 0.18,
+    "institutional_invest_stocks_boost": 0.35,
+    "institutional_withdraw_stocks_hit": -0.55
+  }
+}
